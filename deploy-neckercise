@@ -23,7 +23,7 @@ echo "Creating project at $PROJECT_DIR..."
 mkdir -p "$PROJECT_DIR"
 
 # Copy source files (excluding node_modules, dist folders)
-rsync -av --exclude='node_modules' --exclude='dist' --exclude='dist2' --exclude='.git' "$SOURCE_DIR/" "$PROJECT_DIR/"
+rsync -av --exclude='node_modules' --exclude='dist' --exclude='dist2' --exclude='dist_new' --exclude='.git' --exclude='.vercel' "$SOURCE_DIR/" "$PROJECT_DIR/"
 
 cd "$PROJECT_DIR"
 
@@ -31,9 +31,17 @@ cd "$PROJECT_DIR"
 echo "Installing dependencies..."
 npm install
 
-# Build
+# Clean old dist and build fresh
 echo "Building..."
+rm -rf dist
 npm run build
+
+# Verify build output
+if [ ! -f "dist/index.html" ]; then
+  echo "ERROR: Build failed - dist/index.html not found"
+  exit 1
+fi
+echo "Build OK: $(ls dist/assets/*.css 2>/dev/null | head -1) $(ls dist/assets/*.js 2>/dev/null | head -1)"
 
 # Create .gitignore if missing
 if [ ! -f ".gitignore" ]; then
@@ -52,7 +60,7 @@ if [ ! -d ".git" ]; then
 fi
 
 git add -A
-git commit -m "Initial commit - Hans Neckercise" 2>/dev/null || echo "No changes to commit"
+git commit -m "Update Hans Neckercise" 2>/dev/null || echo "No changes to commit"
 
 # Create GitHub repo (skip if already exists)
 if gh repo view hansherrlin-spec/hans-neckercise &> /dev/null; then
@@ -68,13 +76,13 @@ echo ""
 echo "GitHub repo: https://github.com/hansherrlin-spec/hans-neckercise"
 echo ""
 
-# Deploy to Vercel
+# Deploy to Vercel (framework auto-detected via vercel.json)
 echo "Deploying to Vercel..."
 vercel --yes --prod
 
 echo ""
 echo "=== DONE ==="
-echo "Hans Neckercise is now live."
+echo "Hans Neckercise is now live at https://hans-neckercise.vercel.app"
 echo ""
 echo "To update after changes, run:"
-echo "  cd $PROJECT_DIR && git add -A && git commit -m 'Update' && git push && vercel --prod"
+echo "  cd ~/Desktop/Claude/Projects/Hans\\ Neckercise && bash deploy-neckercise"
