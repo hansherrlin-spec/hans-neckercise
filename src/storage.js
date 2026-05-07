@@ -13,12 +13,14 @@ function getWeekId(date = new Date()) {
   return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }
 
+const DEFAULTS = { daily: {}, gym: {}, weekly: {}, symptoms: {}, streak: 0, lastCompleteDate: null };
+
 function loadAll() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { daily: {}, gym: {}, weekly: {}, symptoms: {}, streak: 0, lastCompleteDate: null };
+    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
   } catch {
-    return { daily: {}, gym: {}, weekly: {}, symptoms: {}, streak: 0, lastCompleteDate: null };
+    return { ...DEFAULTS };
   }
 }
 
