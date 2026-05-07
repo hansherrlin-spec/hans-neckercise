@@ -7,11 +7,12 @@ import {
   getWeeklyTracking, saveWeeklyTracking,
   getStreak, exportData, importData,
   getDailyCompletionRate, getDailyHistory, getWeeklyHistory, getToday,
+  getMonthData, getGymDayLetterForDate,
 } from './storage';
 import {
   CheckCircle2, Circle, Flame, Download, Upload, ChevronDown, ChevronUp,
   Dumbbell, StretchHorizontal, AlertTriangle, TrendingDown, Activity, ExternalLink,
-  Calendar,
+  Calendar, ChevronLeft, ChevronRight, X,
 } from 'lucide-react';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -270,14 +271,15 @@ function SymptomTrend() {
 
 // --- Sections ---
 
-function DailyPractice() {
-  const [checks, setChecks] = useState(getDailyChecks());
+function DailyPractice({ date, onUpdate }) {
+  const [checks, setChecks] = useState(getDailyChecks(date));
   const completed = Object.values(checks).filter(Boolean).length;
   const pct = Math.round((completed / DAILY_EXERCISES.length) * 100);
 
   const toggle = (id) => {
-    const updated = toggleDailyCheck(id);
+    const updated = toggleDailyCheck(id, date);
     setChecks({ ...updated });
+    onUpdate?.();
   };
 
   return (
@@ -308,8 +310,8 @@ function DailyPractice() {
   );
 }
 
-function SymptomCheck() {
-  const existing = getSymptoms();
+function SymptomCheck({ date, onUpdate }) {
+  const existing = getSymptoms(date);
   const [values, setValues] = useState(existing || { whistling: null, pain: null, jaw: null, sleep: null });
   const [saved, setSaved] = useState(!!existing);
 
@@ -318,8 +320,9 @@ function SymptomCheck() {
     setValues(next);
     // Auto-save when all 4 are set
     if (Object.values(next).every(v => v !== null)) {
-      saveSymptoms(next);
+      saveSymptoms(next, date);
       setSaved(true);
+      onUpdate?.();
     }
   };
 
@@ -339,17 +342,18 @@ function SymptomCheck() {
   );
 }
 
-function GymWorkout({ dayLetter }) {
+function GymWorkout({ dayLetter, date, onUpdate }) {
   const day = GYM_DAYS[dayLetter];
-  const [checks, setChecks] = useState(getGymChecks(dayLetter));
+  const [checks, setChecks] = useState(getGymChecks(dayLetter, date));
   const [showStretches, setShowStretches] = useState(false);
   const allItems = [...day.exercises, ...day.stretches];
   const completed = allItems.filter(ex => checks[ex.id]).length;
   const pct = Math.round((completed / allItems.length) * 100);
 
   const toggle = (id) => {
-    const updated = toggleGymCheck(dayLetter, id);
+    const updated = toggleGymCheck(dayLetter, id, date);
     setChecks({ ...updated });
+    onUpdate?.();
   };
 
   return (
@@ -446,6 +450,158 @@ function RulesPanel() {
   );
 }
 
+// --- Month Calendar with Day Detail ---
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function MonthCalendar() {
+  const now = new Date();
+  const todayStr = getToday();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const monthData = getMonthData(year, month);
+
+  const prevMonth = () => {
+    if (month === 0) { setMonth(11); setYear(year - 1); }
+    else setMonth(month - 1);
+    setSelectedDate(null);
+  };
+  const nextMonth = () => {
+    if (month === 11) { setMonth(0); setYear(year + 1); }
+    else setMonth(month + 1);
+    setSelectedDate(null);
+  };
+
+  const getCellColor = (day) => {
+    if (!day.hasData) return 'bg-zinc-100 dark:bg-zinc-800';
+    const pct = day.dailyCount / day.dailyTotal;
+    if (pct >= 0.9) return 'bg-emerald-500 text-white';
+    if (pct >= 0.7) return 'bg-emerald-400 text-white';
+    if (pct >= 0.4) return 'bg-emerald-300 dark:bg-emerald-600';
+    if (pct > 0) return 'bg-emerald-200 dark:bg-emerald-700';
+    if (day.hasSymptoms) return 'bg-blue-100 dark:bg-blue-900/40';
+    return 'bg-zinc-100 dark:bg-zinc-800';
+  };
+
+  // Build grid with empty cells for offset
+  const emptyCells = (monthData.firstDow + 6) % 7; // Monday-start
+
+  const isFuture = (dateStr) => dateStr > todayStr;
+
+  return (
+    <div className="space-y-4">
+      {/* Month nav */}
+      <div className="bg-white dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 p-3">
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={prevMonth} className="p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700">
+            <ChevronLeft className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />
+          </button>
+          <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">
+            {MONTH_NAMES[month]} {year}
+          </h3>
+          <button onClick={nextMonth} className="p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700"
+            disabled={month === now.getMonth() && year === now.getFullYear()}>
+            <ChevronRight className={`w-5 h-5 ${month === now.getMonth() && year === now.getFullYear() ? 'text-zinc-300 dark:text-zinc-600' : 'text-zinc-600 dark:text-zinc-400'}`} />
+          </button>
+        </div>
+
+        {/* Day headers */}
+        <div className="grid grid-cols-7 gap-1 mb-1">
+          {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+            <div key={d} className="text-center text-[10px] font-medium text-zinc-400">{d}</div>
+          ))}
+        </div>
+
+        {/* Day grid */}
+        <div className="grid grid-cols-7 gap-1">
+          {Array.from({ length: emptyCells }).map((_, i) => (
+            <div key={`e${i}`} />
+          ))}
+          {monthData.days.map(day => {
+            const isToday = day.date === todayStr;
+            const isSelected = day.date === selectedDate;
+            const future = isFuture(day.date);
+            return (
+              <button key={day.date}
+                onClick={() => !future && setSelectedDate(isSelected ? null : day.date)}
+                disabled={future}
+                className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs transition-all relative
+                  ${future ? 'opacity-30 cursor-default' : 'cursor-pointer'}
+                  ${isSelected ? 'ring-2 ring-emerald-500 ring-offset-1 dark:ring-offset-zinc-800' : ''}
+                  ${isToday ? 'ring-2 ring-blue-400 ring-offset-1 dark:ring-offset-zinc-800' : ''}
+                  ${getCellColor(day)}`}>
+                <span className="font-medium">{day.day}</span>
+                {day.hasData && (
+                  <span className="text-[8px] opacity-75">{day.dailyCount}/{day.dailyTotal}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-2 mt-3 justify-center">
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-sm bg-emerald-200 dark:bg-emerald-700" />
+            <span className="text-[9px] text-zinc-400">Some</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-sm bg-emerald-400" />
+            <span className="text-[9px] text-zinc-400">Most</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
+            <span className="text-[9px] text-zinc-400">All</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-sm bg-blue-100 dark:bg-blue-900/40" />
+            <span className="text-[9px] text-zinc-400">Symptoms only</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Day detail panel */}
+      {selectedDate && (
+        <DayDetail key={`${selectedDate}-${refreshKey}`} date={selectedDate}
+          onClose={() => setSelectedDate(null)}
+          onUpdate={() => setRefreshKey(k => k + 1)} />
+      )}
+    </div>
+  );
+}
+
+function DayDetail({ date, onClose, onUpdate }) {
+  const d = new Date(date + 'T12:00:00');
+  const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()];
+  const shortDay = DAY_NAMES[d.getDay()];
+  const schedule = WEEKLY_SCHEDULE.find(s => s.day === shortDay);
+  const gymLetter = schedule?.gym || getGymDayLetterForDate(date);
+  const isToday = date === getToday();
+
+  return (
+    <div className="bg-white dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-bold text-zinc-800 dark:text-zinc-100">{dayName}</h3>
+          <p className="text-xs text-zinc-500">{date}{isToday ? ' (Today)' : ''}</p>
+        </div>
+        <button onClick={onClose} className="p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700">
+          <X className="w-5 h-5 text-zinc-400" />
+        </button>
+      </div>
+
+      <SymptomCheck date={date} onUpdate={onUpdate} />
+      <DailyPractice date={date} onUpdate={onUpdate} />
+      {gymLetter && GYM_DAYS[gymLetter] && (
+        <GymWorkout dayLetter={gymLetter} date={date} onUpdate={onUpdate} />
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const today = getTodaySchedule();
   const streak = getStreak();
@@ -495,6 +651,7 @@ export default function App() {
         <div className="max-w-lg mx-auto flex">
           {[
             { id: 'today', label: 'Today' },
+            { id: 'calendar', label: 'Calendar' },
             { id: 'progress', label: 'Progress' },
             { id: 'data', label: 'Data' },
           ].map(t => (
@@ -529,6 +686,8 @@ export default function App() {
             <RulesPanel />
           </>
         )}
+
+        {tab === 'calendar' && <MonthCalendar />}
 
         {tab === 'progress' && (
           <>

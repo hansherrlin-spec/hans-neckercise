@@ -36,33 +36,75 @@ export function getDailyChecks(date) {
   return data.daily[key] || {};
 }
 
-export function toggleDailyCheck(exerciseId) {
+export function toggleDailyCheck(exerciseId, date) {
   const data = loadAll();
-  const today = getToday();
-  if (!data.daily[today]) data.daily[today] = {};
-  data.daily[today][exerciseId] = !data.daily[today][exerciseId];
+  const key = date || getToday();
+  if (!data.daily[key]) data.daily[key] = {};
+  data.daily[key][exerciseId] = !data.daily[key][exerciseId];
   updateStreak(data);
   saveAll(data);
-  return data.daily[today];
+  return data.daily[key];
 }
 
 // --- Gym checks ---
 
-export function getGymChecks(dayLetter) {
+export function getGymChecks(dayLetter, date) {
   const data = loadAll();
-  const today = getToday();
-  const key = `${today}-${dayLetter}`;
+  const key = `${date || getToday()}-${dayLetter}`;
   return data.gym[key] || {};
 }
 
-export function toggleGymCheck(dayLetter, exerciseId) {
+export function toggleGymCheck(dayLetter, exerciseId, date) {
   const data = loadAll();
-  const today = getToday();
-  const key = `${today}-${dayLetter}`;
+  const key = `${date || getToday()}-${dayLetter}`;
   if (!data.gym[key]) data.gym[key] = {};
   data.gym[key][exerciseId] = !data.gym[key][exerciseId];
   saveAll(data);
   return data.gym[key];
+}
+
+// --- Calendar helpers ---
+
+export function getMonthData(year, month) {
+  const data = loadAll();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const days = [];
+
+  for (let d = 1; d <= lastDay.getDate(); d++) {
+    const date = new Date(year, month, d);
+    const key = date.toISOString().split('T')[0];
+    const checks = data.daily[key] || {};
+    const dailyCount = Object.values(checks).filter(Boolean).length;
+    let gymCount = 0;
+    for (const gymKey of Object.keys(data.gym)) {
+      if (gymKey.startsWith(key)) {
+        gymCount = Object.values(data.gym[gymKey]).filter(Boolean).length;
+      }
+    }
+    const hasSymptoms = !!data.symptoms[key];
+    days.push({
+      date: key,
+      day: d,
+      dow: date.getDay(),
+      dailyCount,
+      dailyTotal: 9,
+      gymCount,
+      hasSymptoms,
+      hasData: dailyCount > 0 || gymCount > 0 || hasSymptoms,
+    });
+  }
+  return { year, month, firstDow: firstDay.getDay(), days };
+}
+
+export function getGymDayLetterForDate(dateStr) {
+  const data = loadAll();
+  for (const gymKey of Object.keys(data.gym)) {
+    if (gymKey.startsWith(dateStr)) {
+      return gymKey.split('-').pop(); // e.g. "2026-05-07-A" -> "A"
+    }
+  }
+  return null;
 }
 
 // --- Symptom tracking (daily, 1-4 scale) ---
