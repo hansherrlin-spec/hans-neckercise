@@ -3,16 +3,57 @@ import { DAILY_EXERCISES, GYM_DAYS, WEEKLY_SCHEDULE, CORE_RULES, AVOID_LIST } fr
 import {
   getDailyChecks, toggleDailyCheck,
   getGymChecks, toggleGymCheck,
+  getSymptoms, saveSymptoms, getSymptomHistory,
   getWeeklyTracking, saveWeeklyTracking,
   getStreak, exportData, importData,
-  getDailyCompletionRate, getWeeklyHistory,
+  getDailyCompletionRate, getDailyHistory, getWeeklyHistory, getToday,
 } from './storage';
 import {
   CheckCircle2, Circle, Flame, Download, Upload, ChevronDown, ChevronUp,
   Dumbbell, StretchHorizontal, AlertTriangle, TrendingDown, Activity, ExternalLink,
+  Calendar,
 } from 'lucide-react';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const SYMPTOM_SCALES = {
+  whistling: {
+    label: 'Whistling Sound',
+    levels: [
+      { value: 1, label: 'Silent', desc: 'Not noticeable' },
+      { value: 2, label: 'Faint', desc: 'Only in silence' },
+      { value: 3, label: 'Present', desc: 'Noticeable during the day' },
+      { value: 4, label: 'Loud', desc: 'Hard to ignore' },
+    ],
+  },
+  pain: {
+    label: 'Neck/Shoulder Pain',
+    levels: [
+      { value: 1, label: 'None', desc: 'Pain-free' },
+      { value: 2, label: 'Mild', desc: 'Aware of it, not limiting' },
+      { value: 3, label: 'Moderate', desc: 'Affects focus or movement' },
+      { value: 4, label: 'Severe', desc: 'Constant, hard to function' },
+    ],
+  },
+  jaw: {
+    label: 'Jaw Tension',
+    levels: [
+      { value: 1, label: 'Relaxed', desc: 'No clenching or tightness' },
+      { value: 2, label: 'Mild', desc: 'Occasional tightness' },
+      { value: 3, label: 'Tight', desc: 'Frequent clenching' },
+      { value: 4, label: 'Locked', desc: 'Constant tension or soreness' },
+    ],
+  },
+  sleep: {
+    label: 'Sleep Quality',
+    levels: [
+      { value: 1, label: 'Great', desc: 'Deep, uninterrupted' },
+      { value: 2, label: 'OK', desc: 'Some waking, rested enough' },
+      { value: 3, label: 'Poor', desc: 'Restless, woke up tired' },
+      { value: 4, label: 'Bad', desc: 'Barely slept' },
+    ],
+  },
+};
 
 function getTodaySchedule() {
   const dayName = DAY_NAMES[new Date().getDay()];
@@ -68,6 +109,167 @@ function ProgressRing({ pct, size = 48, stroke = 4 }) {
   );
 }
 
+// --- Symptom Scale Picker (1-4) ---
+
+function SymptomPicker({ symptomKey, value, onChange }) {
+  const scale = SYMPTOM_SCALES[symptomKey];
+  // For sleep, 1=best. For others, 1=best. Color accordingly.
+  const getColor = (level, isSelected) => {
+    if (!isSelected) return 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border-zinc-200 dark:border-zinc-700';
+    if (symptomKey === 'sleep') {
+      const colors = ['bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700',
+        'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-700',
+        'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700',
+        'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border-red-300 dark:border-red-700'];
+      return colors[level - 1];
+    }
+    const colors = ['bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700',
+      'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400 border-yellow-300 dark:border-yellow-700',
+      'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400 border-orange-300 dark:border-orange-700',
+      'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 border-red-300 dark:border-red-700'];
+    return colors[level - 1];
+  };
+
+  return (
+    <div className="mb-4">
+      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">{scale.label}</p>
+      <div className="grid grid-cols-4 gap-1.5">
+        {scale.levels.map(level => {
+          const isSelected = value === level.value;
+          return (
+            <button key={level.value} onClick={() => onChange(level.value)}
+              className={`p-2 rounded-lg border text-center transition-all ${getColor(level.value, isSelected)}`}>
+              <span className="block text-xs font-bold">{level.label}</span>
+              <span className="block text-[10px] opacity-75 leading-tight mt-0.5">{level.desc}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Daily Completion Heatmap ---
+
+function CompletionHeatmap() {
+  const history = getDailyHistory(28); // 4 weeks
+  const today = getToday();
+
+  const getCellColor = (day) => {
+    if (!day.hasData) return 'bg-zinc-100 dark:bg-zinc-800';
+    const pct = day.dailyCount / day.dailyTotal;
+    if (pct >= 0.9) return 'bg-emerald-500';
+    if (pct >= 0.7) return 'bg-emerald-400';
+    if (pct >= 0.4) return 'bg-emerald-300 dark:bg-emerald-600';
+    if (pct > 0) return 'bg-emerald-200 dark:bg-emerald-700';
+    return 'bg-zinc-100 dark:bg-zinc-800';
+  };
+
+  // Group by week
+  const weeks = [];
+  for (let i = 0; i < history.length; i += 7) {
+    weeks.push(history.slice(i, i + 7));
+  }
+
+  return (
+    <div className="bg-white dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 p-3">
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-2">
+        <Calendar className="w-4 h-4 text-emerald-500" />
+        Last 4 Weeks
+      </h3>
+      <div className="flex gap-1 mb-1">
+        {['M','T','W','T','F','S','S'].map((d, i) => (
+          <div key={i} className="flex-1 text-center text-[10px] text-zinc-400">{d}</div>
+        ))}
+      </div>
+      {weeks.map((week, wi) => (
+        <div key={wi} className="flex gap-1 mb-1">
+          {week.map(day => (
+            <div key={day.date} className="flex-1 flex flex-col items-center">
+              <div className={`w-full aspect-square rounded-sm ${getCellColor(day)} ${day.date === today ? 'ring-2 ring-emerald-500 ring-offset-1 dark:ring-offset-zinc-800' : ''}`}
+                title={`${day.date}: ${day.dailyCount}/${day.dailyTotal} daily${day.gymCount ? `, ${day.gymCount} gym` : ''}`} />
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="flex items-center gap-2 mt-2 justify-end">
+        <span className="text-[10px] text-zinc-400">Less</span>
+        <div className="w-3 h-3 rounded-sm bg-zinc-100 dark:bg-zinc-800" />
+        <div className="w-3 h-3 rounded-sm bg-emerald-200 dark:bg-emerald-700" />
+        <div className="w-3 h-3 rounded-sm bg-emerald-300 dark:bg-emerald-600" />
+        <div className="w-3 h-3 rounded-sm bg-emerald-400" />
+        <div className="w-3 h-3 rounded-sm bg-emerald-500" />
+        <span className="text-[10px] text-zinc-400">More</span>
+      </div>
+    </div>
+  );
+}
+
+// --- Symptom Trend Chart ---
+
+function SymptomTrend() {
+  const history = getSymptomHistory(30);
+  if (history.length < 2) return null;
+
+  const width = 320;
+  const height = 100;
+  const padding = { top: 10, right: 10, bottom: 20, left: 25 };
+  const chartW = width - padding.left - padding.right;
+  const chartH = height - padding.top - padding.bottom;
+
+  const lines = [
+    { key: 'whistling', color: '#f59e0b', label: 'Whistling' },
+    { key: 'pain', color: '#ef4444', label: 'Pain' },
+    { key: 'jaw', color: '#f97316', label: 'Jaw' },
+    { key: 'sleep', color: '#3b82f6', label: 'Sleep' },
+  ];
+
+  const makePath = (key) => {
+    return history.map((d, i) => {
+      const x = padding.left + (i / (history.length - 1)) * chartW;
+      const y = padding.top + ((d[key] - 1) / 3) * chartH;
+      return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+    }).join(' ');
+  };
+
+  return (
+    <div className="bg-white dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 p-3">
+      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-2">
+        <Activity className="w-4 h-4 text-amber-500" />
+        Symptom Trend
+      </h3>
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
+        {/* Y axis labels */}
+        {[1,2,3,4].map(v => (
+          <text key={v} x={padding.left - 5} y={padding.top + ((v-1)/3) * chartH + 3}
+            textAnchor="end" className="fill-zinc-400 dark:fill-zinc-500" fontSize="8">{v}</text>
+        ))}
+        {/* Grid lines */}
+        {[1,2,3,4].map(v => (
+          <line key={v} x1={padding.left} x2={width - padding.right}
+            y1={padding.top + ((v-1)/3) * chartH} y2={padding.top + ((v-1)/3) * chartH}
+            stroke="currentColor" strokeWidth="0.5" className="text-zinc-200 dark:text-zinc-700" />
+        ))}
+        {/* Lines */}
+        {lines.map(l => (
+          <path key={l.key} d={makePath(l.key)} fill="none" stroke={l.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+      </svg>
+      <div className="flex flex-wrap gap-3 mt-1">
+        {lines.map(l => (
+          <div key={l.key} className="flex items-center gap-1">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: l.color }} />
+            <span className="text-[10px] text-zinc-500">{l.label}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-zinc-400 mt-1">Lower is better (1 = no symptoms)</p>
+    </div>
+  );
+}
+
+// --- Sections ---
+
 function DailyPractice() {
   const [checks, setChecks] = useState(getDailyChecks());
   const completed = Object.values(checks).filter(Boolean).length;
@@ -102,6 +304,37 @@ function DailyPractice() {
           />
         ))}
       </div>
+    </section>
+  );
+}
+
+function SymptomCheck() {
+  const existing = getSymptoms();
+  const [values, setValues] = useState(existing || { whistling: null, pain: null, jaw: null, sleep: null });
+  const [saved, setSaved] = useState(!!existing);
+
+  const update = (key, val) => {
+    const next = { ...values, [key]: val };
+    setValues(next);
+    // Auto-save when all 4 are set
+    if (Object.values(next).every(v => v !== null)) {
+      saveSymptoms(next);
+      setSaved(true);
+    }
+  };
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+          <Activity className="w-5 h-5 text-amber-500" />
+          How are you feeling?
+        </h2>
+        {saved && <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">Saved</span>}
+      </div>
+      {Object.keys(SYMPTOM_SCALES).map(key => (
+        <SymptomPicker key={key} symptomKey={key} value={values[key]} onChange={(v) => update(key, v)} />
+      ))}
     </section>
   );
 }
@@ -168,109 +401,6 @@ function GymWorkout({ dayLetter }) {
             />
           ))}
         </div>
-      )}
-    </section>
-  );
-}
-
-function WeeklyTracker() {
-  const [tracking, setTracking] = useState(getWeeklyTracking());
-  const [expanded, setExpanded] = useState(false);
-  const history = getWeeklyHistory();
-
-  const update = (field, value) => {
-    const updated = { ...tracking, [field]: Number(value) };
-    setTracking(updated);
-    saveWeeklyTracking(updated);
-  };
-
-  const fields = [
-    { key: 'whistling', label: 'Whistling Sound', color: 'text-amber-600' },
-    { key: 'pain', label: 'Neck/Shoulder Pain', color: 'text-red-600' },
-    { key: 'jaw', label: 'Jaw Tension', color: 'text-orange-600' },
-    { key: 'sleep', label: 'Sleep Quality', color: 'text-blue-600' },
-  ];
-
-  return (
-    <section>
-      <h2 className="text-lg font-bold text-zinc-800 dark:text-zinc-100 flex items-center gap-2 mb-3">
-        <Activity className="w-5 h-5 text-amber-500" />
-        Weekly Tracking
-      </h2>
-
-      <div className="space-y-4">
-        {fields.map(f => (
-          <div key={f.key}>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                {f.label}
-              </label>
-              <span className={`text-sm font-bold ${f.color}`}>{tracking[f.key]}/10</span>
-            </div>
-            <input
-              type="range" min="1" max="10" value={tracking[f.key]}
-              onChange={e => update(f.key, e.target.value)}
-              className="w-full h-2 bg-zinc-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-            />
-          </div>
-        ))}
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Workouts (X/3)</label>
-            <input type="number" min="0" max="3" value={tracking.workouts}
-              onChange={e => update('workouts', e.target.value)}
-              className="mt-1 w-full p-2 text-center rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Daily Practice (X/7)</label>
-            <input type="number" min="0" max="7" value={tracking.dailyPractice}
-              onChange={e => update('dailyPractice', e.target.value)}
-              className="mt-1 w-full p-2 text-center rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-            />
-          </div>
-        </div>
-      </div>
-
-      {history.length > 1 && (
-        <>
-          <button onClick={() => setExpanded(!expanded)}
-            className="mt-4 flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
-            History ({history.length} weeks)
-            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-          {expanded && (
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full text-xs text-zinc-600 dark:text-zinc-400">
-                <thead>
-                  <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                    <th className="py-1 text-left">Week</th>
-                    <th className="py-1">Whistling</th>
-                    <th className="py-1">Pain</th>
-                    <th className="py-1">Jaw</th>
-                    <th className="py-1">Sleep</th>
-                    <th className="py-1">Gym</th>
-                    <th className="py-1">Daily</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.slice().reverse().map(w => (
-                    <tr key={w.week} className="border-b border-zinc-100 dark:border-zinc-800">
-                      <td className="py-1 text-left font-medium">{w.week}</td>
-                      <td className="py-1 text-center">{w.whistling}</td>
-                      <td className="py-1 text-center">{w.pain}</td>
-                      <td className="py-1 text-center">{w.jaw}</td>
-                      <td className="py-1 text-center">{w.sleep}</td>
-                      <td className="py-1 text-center">{w.workouts}/3</td>
-                      <td className="py-1 text-center">{w.dailyPractice}/7</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
       )}
     </section>
   );
@@ -365,7 +495,7 @@ export default function App() {
         <div className="max-w-lg mx-auto flex">
           {[
             { id: 'today', label: 'Today' },
-            { id: 'weekly', label: 'Weekly' },
+            { id: 'progress', label: 'Progress' },
             { id: 'data', label: 'Data' },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -393,18 +523,15 @@ export default function App() {
               </div>
             </div>
 
+            <SymptomCheck />
             <DailyPractice />
             {today.gym && <GymWorkout dayLetter={today.gym} />}
             <RulesPanel />
           </>
         )}
 
-        {tab === 'weekly' && <WeeklyTracker />}
-
-        {tab === 'data' && (
-          <section className="space-y-4">
-            <h2 className="text-lg font-bold text-zinc-800 dark:text-zinc-100">Stats & Backup</h2>
-
+        {tab === 'progress' && (
+          <>
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white dark:bg-zinc-800 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700 text-center">
                 <p className="text-2xl font-bold text-emerald-600">{dailyRate.pct}%</p>
@@ -416,24 +543,8 @@ export default function App() {
               </div>
             </div>
 
-            <div className="space-y-3">
-              <button onClick={exportData}
-                className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-medium transition-colors">
-                <Download className="w-4 h-4" /> Export Backup (JSON)
-              </button>
-
-              <button onClick={() => fileRef.current?.click()}
-                className="w-full flex items-center justify-center gap-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 py-3 rounded-xl font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors">
-                <Upload className="w-4 h-4" /> Import Backup
-              </button>
-              <input ref={fileRef} type="file" accept=".json" onChange={handleImport} className="hidden" />
-
-              {importMsg && (
-                <p className={`text-sm text-center ${importMsg.includes('success') ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {importMsg}
-                </p>
-              )}
-            </div>
+            <CompletionHeatmap />
+            <SymptomTrend />
 
             <div className="bg-white dark:bg-zinc-800 rounded-xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
               <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 p-3 border-b border-zinc-200 dark:border-zinc-700">
@@ -454,6 +565,35 @@ export default function App() {
                 ))}
               </div>
             </div>
+          </>
+        )}
+
+        {tab === 'data' && (
+          <section className="space-y-4">
+            <h2 className="text-lg font-bold text-zinc-800 dark:text-zinc-100">Backup & Restore</h2>
+
+            <div className="space-y-3">
+              <button onClick={exportData}
+                className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-medium transition-colors">
+                <Download className="w-4 h-4" /> Export Backup (JSON)
+              </button>
+
+              <button onClick={() => fileRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 py-3 rounded-xl font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors">
+                <Upload className="w-4 h-4" /> Import Backup
+              </button>
+              <input ref={fileRef} type="file" accept=".json" onChange={handleImport} className="hidden" />
+
+              {importMsg && (
+                <p className={`text-sm text-center ${importMsg.includes('success') ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {importMsg}
+                </p>
+              )}
+            </div>
+
+            <p className="text-xs text-zinc-400 text-center">
+              All data is stored locally in your browser. Export regularly as backup.
+            </p>
           </section>
         )}
       </main>

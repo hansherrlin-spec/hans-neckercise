@@ -1,6 +1,6 @@
 const STORAGE_KEY = 'hans-neckercise';
 
-function getToday() {
+export function getToday() {
   return new Date().toISOString().split('T')[0];
 }
 
@@ -16,9 +16,9 @@ function getWeekId(date = new Date()) {
 function loadAll() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { daily: {}, gym: {}, weekly: {}, streak: 0, lastCompleteDate: null };
+    return raw ? JSON.parse(raw) : { daily: {}, gym: {}, weekly: {}, symptoms: {}, streak: 0, lastCompleteDate: null };
   } catch {
-    return { daily: {}, gym: {}, weekly: {}, streak: 0, lastCompleteDate: null };
+    return { daily: {}, gym: {}, weekly: {}, symptoms: {}, streak: 0, lastCompleteDate: null };
   }
 }
 
@@ -26,10 +26,12 @@ function saveAll(data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-export function getDailyChecks() {
+// --- Daily checks ---
+
+export function getDailyChecks(date) {
   const data = loadAll();
-  const today = getToday();
-  return data.daily[today] || {};
+  const key = date || getToday();
+  return data.daily[key] || {};
 }
 
 export function toggleDailyCheck(exerciseId) {
@@ -41,6 +43,8 @@ export function toggleDailyCheck(exerciseId) {
   saveAll(data);
   return data.daily[today];
 }
+
+// --- Gym checks ---
 
 export function getGymChecks(dayLetter) {
   const data = loadAll();
@@ -59,10 +63,42 @@ export function toggleGymCheck(dayLetter, exerciseId) {
   return data.gym[key];
 }
 
+// --- Symptom tracking (daily, 1-4 scale) ---
+
+export function getSymptoms(date) {
+  const data = loadAll();
+  const key = date || getToday();
+  return data.symptoms[key] || null;
+}
+
+export function saveSymptoms(values, date) {
+  const data = loadAll();
+  const key = date || getToday();
+  data.symptoms[key] = { ...values, date: key };
+  saveAll(data);
+}
+
+export function getSymptomHistory(days = 30) {
+  const data = loadAll();
+  const today = new Date();
+  const result = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    if (data.symptoms[key]) {
+      result.push({ date: key, ...data.symptoms[key] });
+    }
+  }
+  return result;
+}
+
+// --- Weekly tracking (auto-computed from daily data) ---
+
 export function getWeeklyTracking() {
   const data = loadAll();
   const weekId = getWeekId();
-  return data.weekly[weekId] || { whistling: 5, pain: 5, jaw: 5, sleep: 5, workouts: 0, dailyPractice: 0 };
+  return data.weekly[weekId] || { workouts: 0, dailyPractice: 0 };
 }
 
 export function saveWeeklyTracking(tracking) {
@@ -72,10 +108,12 @@ export function saveWeeklyTracking(tracking) {
   saveAll(data);
 }
 
+// --- Streak ---
+
 function updateStreak(data) {
   const today = getToday();
   const todayChecks = data.daily[today] || {};
-  const totalRequired = 8; // excluding optional heat
+  const totalRequired = 8;
   const completed = Object.values(todayChecks).filter(Boolean).length;
 
   if (completed >= totalRequired) {
@@ -106,9 +144,59 @@ export function getStreak() {
   return data.streak || 0;
 }
 
-export function getHistory() {
-  return loadAll();
+// --- History & completion tracking ---
+
+export function getDailyHistory(days = 30) {
+  const data = loadAll();
+  const today = new Date();
+  const result = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    const checks = data.daily[key] || {};
+    const dailyCount = Object.values(checks).filter(Boolean).length;
+
+    // Check if gym was done that day
+    let gymCount = 0;
+    let gymTotal = 0;
+    for (const gymKey of Object.keys(data.gym)) {
+      if (gymKey.startsWith(key)) {
+        const gc = data.gym[gymKey];
+        gymCount = Object.values(gc).filter(Boolean).length;
+        gymTotal = Object.keys(gc).length || 1;
+      }
+    }
+
+    result.push({
+      date: key,
+      dayName: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()],
+      dailyCount,
+      dailyTotal: 9,
+      gymCount,
+      gymTotal,
+      hasData: dailyCount > 0 || gymCount > 0,
+    });
+  }
+  return result;
 }
+
+export function getDailyCompletionRate(days = 30) {
+  const history = getDailyHistory(days);
+  const daysWithData = history.filter(d => d.hasData);
+  const completed = daysWithData.filter(d => d.dailyCount >= 7).length;
+  const total = days;
+  return { completed, total, pct: total > 0 ? Math.round((completed / total) * 100) : 0 };
+}
+
+export function getWeeklyHistory() {
+  const data = loadAll();
+  return Object.entries(data.weekly)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([week, vals]) => ({ week, ...vals }));
+}
+
+// --- Export / Import ---
 
 export function exportData() {
   const data = loadAll();
@@ -135,48 +223,4 @@ export function importData(file) {
     };
     reader.readAsText(file);
   });
-}
-
-export function getDailyCompletionRate(days = 30) {
-  const data = loadAll();
-  const today = new Date();
-  let completed = 0;
-  let total = 0;
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
-    const checks = data.daily[key];
-    if (checks) {
-      const count = Object.values(checks).filter(Boolean).length;
-      if (count >= 7) completed++;
-    }
-    total++;
-  }
-  return { completed, total, pct: Math.round((completed / total) * 100) };
-}
-
-export function getGymCompletionRate(days = 30) {
-  const data = loadAll();
-  const today = new Date();
-  let completed = 0;
-  for (let i = 0; i < days; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
-    for (const gymKey of Object.keys(data.gym)) {
-      if (gymKey.startsWith(key)) {
-        const checks = data.gym[gymKey];
-        if (Object.values(checks).filter(Boolean).length >= 3) completed++;
-      }
-    }
-  }
-  return completed;
-}
-
-export function getWeeklyHistory() {
-  const data = loadAll();
-  return Object.entries(data.weekly)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([week, vals]) => ({ week, ...vals }));
 }
